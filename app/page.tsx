@@ -38,21 +38,54 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-function toPlainText(content: any): string {
+type BackendRole =
+  | "user"
+  | "assistant"
+  | "ai"
+  | "tool"
+  | "system"
+  | "developer";
+type UnknownRecord = Record<string, unknown>;
+
+interface BackendMessage {
+  role?: BackendRole;
+  type?: string;
+  name?: string;
+  content?: unknown;
+  _getType?: () => string;
+}
+
+function isRecord(v: unknown): v is UnknownRecord {
+  return typeof v === "object" && v !== null;
+}
+
+function toPlainText(content: unknown): string {
   if (typeof content === "string") return content;
+
   if (Array.isArray(content)) {
     return content
-      .map((p) =>
-        typeof p === "string" ? p : p?.text ?? p?.content ?? p?.value ?? ""
-      )
+      .map((p) => {
+        if (typeof p === "string") return p;
+        if (isRecord(p)) {
+          const t = p["text"];
+          const c = p["content"];
+          const v = p["value"];
+          if (typeof t === "string") return t;
+          if (typeof c === "string") return c;
+          if (typeof v === "string") return v;
+        }
+        return "";
+      })
       .filter(Boolean)
       .join("\n")
       .trim();
   }
-  if (content && typeof content === "object") {
-    if (typeof (content as any).text === "string") return (content as any).text;
-    if (typeof (content as any).content === "string")
-      return (content as any).content;
+
+  if (isRecord(content)) {
+    const t = content["text"];
+    const c = content["content"];
+    if (typeof t === "string") return t;
+    if (typeof c === "string") return c;
     try {
       return JSON.stringify(content);
     } catch {
@@ -318,19 +351,6 @@ function AssistantTenderCard({ row }: { row: ParsedTenderRow }) {
     ? "PDF (EN)"
     : "PDF";
 
-  console.log("🧩 Rendering card row:", {
-    PubNo: row.pubno,
-    NoticeId: row.noticeId,
-    Buyer: row.buyer,
-    Title: row.title,
-    Published: row.published,
-    Deadline: row.deadline,
-    CPV: row.cpv,
-    Value: row.value,
-    Pdf: row.pdf,
-    DescriptionPreview: row.description?.slice(0, 140),
-  });
-
   return (
     <Card className="border bg-gradient-to-b from-muted/40 to-background hover:shadow-md transition">
       <CardContent className="p-4">
@@ -438,32 +458,21 @@ export default function TenderAgentChatPage() {
     const content = (text ?? input).trim();
     if (!content) return;
 
-    console.log("➡️ POST /agentChat", {
-      baseUrl: BASE_URL,
-      threadId,
-      message: content.slice(0, 500),
-    });
-
     setMessages((prev) => [...prev, { role: "user", content }]);
     setInput("");
     setLoading(true);
 
     try {
-      const data = await fetchJSON<{ messages: any[] }>(
-        `${BASE_URL}/agentChat`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            messages: [{ role: "user", content }],
-            thread_id: threadId,
-          }),
-        }
-      );
-
-      console.log(
-        "⬅️ /agentChat raw response (trimmed):",
-        JSON.stringify(data)?.slice(0, 2000)
-      );
+      interface AgentChatResponse {
+        messages: BackendMessage[];
+      }
+      const data = await fetchJSON<AgentChatResponse>(`${BASE_URL}/agentChat`, {
+        method: "POST",
+        body: JSON.stringify({
+          messages: [{ role: "user", content }],
+          thread_id: threadId,
+        }),
+      });
 
       const assistant = pickLastAssistantMessage(data.messages);
       if (assistant && assistant.content) {
@@ -478,11 +487,14 @@ export default function TenderAgentChatPage() {
           },
         ]);
       }
-    } catch (e: any) {
-      console.error("💥 /agentChat error:", e?.stack || e?.message || e);
+    } catch (e: unknown) {
+      const msg =
+        typeof e === "object" && e !== null && "message" in e
+          ? String((e as { message?: unknown }).message)
+          : String(e);
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Errore: ${e?.message || e}` },
+        { role: "assistant", content: `Errore: ${msg}` },
       ]);
     } finally {
       setLoading(false);
@@ -490,7 +502,7 @@ export default function TenderAgentChatPage() {
   }
 
   function pickLastAssistantMessage(
-    raw: any[]
+    raw: BackendMessage[]
   ): { role: "assistant"; content: string } | null {
     if (!Array.isArray(raw)) return null;
     for (let i = raw.length - 1; i >= 0; i--) {
