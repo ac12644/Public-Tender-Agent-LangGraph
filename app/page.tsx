@@ -1,103 +1,659 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import * as React from "react";
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  ArrowRight,
+  Bot,
+  ExternalLink,
+  Loader2,
+  RefreshCcw,
+} from "lucide-react";
+
+/* -------------------------------------------------------
+ * Config
+ * ----------------------------------------------------- */
+const BASE_URL = process.env.NEXT_PUBLIC_TENDER_API_BASE ?? "";
+
+/* -------------------------------------------------------
+ * Helpers
+ * ----------------------------------------------------- */
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as T;
+}
+
+function toPlainText(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) =>
+        typeof p === "string" ? p : p?.text ?? p?.content ?? p?.value ?? ""
+      )
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (content && typeof content === "object") {
+    if (typeof (content as any).text === "string") return (content as any).text;
+    if (typeof (content as any).content === "string")
+      return (content as any).content;
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return String(content);
+    }
+  }
+  return "";
+}
+
+function cleanAssistantText(s: string): string {
+  if (!s) return "";
+  const withoutToolBlocks = s.replace(/^```[\s\S]*?```[\r\n]*/g, "").trim();
+  return withoutToolBlocks.replace(/\n{3,}/g, "\n\n");
+}
+
+function SuggestionChips({
+  suggestions,
+  onPick,
+  disabled,
+}: {
+  suggestions: string[];
+  onPick: (s: string) => void;
+  disabled?: boolean;
+}) {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="flex justify-end">
+      <div className={["relative max-w-[85%] ", "px-3 py-2"].join(" ")}>
+        <div className="flex flex-col gap-2">
+          {suggestions.map((s, i) => (
+            <Button
+              key={s}
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label={`Suggerimento ${i + 1}: ${s}`}
+              className={[
+                "w-full justify-start",
+                "rounded-lg",
+                "border border-border/60",
+                "bg-background hover:bg-muted",
+                "text-foreground",
+                "cursor-pointer",
+                "px-3 py-2",
+                "shadow-sm transition-transform",
+                "hover:-translate-y-0.5 active:translate-y-0",
+                "focus-visible:ring-2 focus-visible:ring-primary/40",
+              ].join(" ")}
+              onClick={() => onPick(s)}
+              disabled={!!disabled}
+            >
+              {s}
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+/* -------- Parse compact markdown table the agent returns -------- */
+type ParsedTenderRow = {
+  pubno: string;
+  noticeId?: string;
+  buyer: string;
+  title: string;
+  published?: string;
+  deadline?: string;
+  cpv?: string;
+  value?: string | number;
+  pdf?: string;
+  description?: string;
+};
+
+function normalizeIsoLike(d?: string): string | undefined {
+  if (!d) return undefined;
+  const clean = d.replace(/T\d{2}:\d{2}:\d{2}.*$/, "").replace(/\+.*/, "");
+  const dt = new Date(clean);
+  return isNaN(dt.getTime()) ? d : dt.toISOString().slice(0, 10);
+}
+
+function parseTendersFromMarkdownTable(md: string): ParsedTenderRow[] {
+  const cleaned = md.replace(/```[\s\S]*?```/g, "").trim();
+  const tableMatch = cleaned.match(
+    /(^|\n)\s*\|(.+\|)\s*\n\|[-:| ]+\|\s*\n([\s\S]*?)(\n{2,}|$)/
+  );
+  if (!tableMatch) return [];
+
+  const headerLine = tableMatch[2].trim();
+  const rowsBlock = tableMatch[3].trim();
+
+  const headers = headerLine
+    .split("|")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+
+  const col = {
+    pubno: headers.findIndex(
+      (h) => h.includes("pubno") || h.includes("publication")
+    ),
+    noticeId: headers.findIndex(
+      (h) => h === "noticeid" || h === "id" || h.includes("notice")
+    ),
+    buyer: headers.findIndex((h) => h.includes("buyer")),
+    title: headers.findIndex((h) => h.includes("title")),
+    published: headers.findIndex((h) => h.includes("publish")),
+    deadline: headers.findIndex(
+      (h) => h.includes("deadline") || h.includes("scadenza")
+    ),
+    cpv: headers.findIndex((h) => h.includes("cpv")),
+    value: headers.findIndex((h) =>
+      ["value", "valore", "importo", "amount"].some((k) => h.includes(k))
+    ),
+    pdf: headers.findIndex((h) => h === "pdf"),
+    description: headers.findIndex(
+      (h) => h === "description" || h.includes("descr")
+    ),
+  };
+
+  const get = (cols: string[], idx: number) =>
+    idx >= 0 && idx < cols.length ? cols[idx].trim() : "";
+
+  return rowsBlock
+    .split("\n")
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
+        .split("|")
+        .map((c) => c.trim())
+    )
+    .filter((cols) => cols.length >= 3 && cols.some(Boolean))
+    .map((cols) => ({
+      pubno: get(cols, col.pubno),
+      noticeId: get(cols, col.noticeId) || undefined,
+      buyer: get(cols, col.buyer),
+      title: get(cols, col.title),
+      published: normalizeIsoLike(get(cols, col.published)) || undefined,
+      deadline: normalizeIsoLike(get(cols, col.deadline)) || undefined,
+      cpv: get(cols, col.cpv) || undefined,
+      value: get(cols, col.value) || undefined,
+      pdf: get(cols, col.pdf) || undefined,
+      description: get(cols, col.description) || undefined,
+    }))
+    .filter((r) => r.title || r.pubno);
+}
+
+function fmtMoney(input?: string | number | null): string {
+  if (input == null || input === "") return "—";
+  if (typeof input === "number" && !isNaN(input)) {
+    return new Intl.NumberFormat("it-IT", {
+      style: "currency",
+      currency: "EUR",
+      minimumFractionDigits: 2,
+    }).format(input);
+  }
+
+  let s = String(input)
+    .replace(/\u00A0/g, " ")
+    .replace(/[€\s]|EUR|EURO/gi, "")
+    .trim();
+
+  s = s.replace(/\s+/g, "");
+  if (!s) return "—";
+
+  const hasComma = s.includes(",");
+  const hasDot = s.includes(".");
+  let normalized = s;
+
+  const onlyDigitsAndSep = s.replace(/[^\d.,-]/g, "");
+  if (onlyDigitsAndSep !== s) normalized = onlyDigitsAndSep;
+
+  const toNumber = (str: string) => {
+    const n = Number(str);
+    return isNaN(n) ? NaN : n;
+  };
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      normalized = normalized.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    const parts = normalized.split(",");
+    const fractional = parts[1] ?? "";
+    if (fractional.length === 0) normalized = normalized.replace(/,/g, "");
+    else if (fractional.length <= 2) normalized = normalized.replace(",", ".");
+    else normalized = normalized.replace(/,/g, "");
+  } else if (hasDot) {
+    const parts = normalized.split(".");
+    const fractional = parts[1] ?? "";
+    if (fractional.length === 0) normalized = normalized.replace(/\./g, "");
+    else if (fractional.length <= 2) {
+      const lastDot = normalized.lastIndexOf(".");
+      normalized =
+        normalized.slice(0, lastDot).replace(/\./g, "") +
+        "." +
+        normalized.slice(lastDot + 1);
+    } else {
+      normalized = normalized.replace(/\./g, "");
+    }
+  }
+
+  const value = toNumber(normalized);
+  if (isNaN(value)) {
+    const digitsOnly = normalized.replace(/[^\d-]/g, "");
+    const v = toNumber(digitsOnly);
+    if (isNaN(v)) return String(input).trim();
+    return new Intl.NumberFormat("it-IT", {
+      style: "currency",
+      currency: "EUR",
+      minimumFractionDigits: 2,
+    }).format(v);
+  }
+
+  return new Intl.NumberFormat("it-IT", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+  }).format(value);
+}
+
+/* -------------------------------------------------------
+ * Message bubbles
+ * ----------------------------------------------------- */
+function AssistantMessage({ text }: { text: string }) {
+  const parsed = React.useMemo(
+    () => parseTendersFromMarkdownTable(text),
+    [text]
+  );
+
+  if (parsed.length > 0) {
+    return (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {parsed.map((r, i) => (
+          <AssistantTenderCard key={`${r.noticeId || r.pubno}-${i}`} row={r} />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {cleanAssistantText(text)}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function AssistantTenderCard({ row }: { row: ParsedTenderRow }) {
+  const idForUrl = row.noticeId || row.pubno;
+  const tedUrl = idForUrl
+    ? `https://ted.europa.eu/it/notice/-/detail/${encodeURIComponent(idForUrl)}`
+    : undefined;
+
+  const pdfUrl = row.pdf && /^https?:\/\//i.test(row.pdf) ? row.pdf : undefined;
+  const pdfLabel = pdfUrl?.includes("/it/")
+    ? "PDF (IT)"
+    : pdfUrl?.includes("/en/")
+    ? "PDF (EN)"
+    : "PDF";
+
+  console.log("🧩 Rendering card row:", {
+    PubNo: row.pubno,
+    NoticeId: row.noticeId,
+    Buyer: row.buyer,
+    Title: row.title,
+    Published: row.published,
+    Deadline: row.deadline,
+    CPV: row.cpv,
+    Value: row.value,
+    Pdf: row.pdf,
+    DescriptionPreview: row.description?.slice(0, 140),
+  });
+
+  return (
+    <Card className="border bg-gradient-to-b from-muted/40 to-background hover:shadow-md transition">
+      <CardContent className="p-4">
+        <div className="text-sm font-semibold leading-snug line-clamp-2">
+          {row.title || "Bando"}
+        </div>
+
+        <div className="mt-1 text-xs text-muted-foreground">
+          {row.buyer || "—"}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+          {row.pubno && (
+            <span className="rounded-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200 px-2 py-0.5">
+              PubNo: {row.pubno}
+            </span>
+          )}
+          {row.noticeId && (
+            <span className="rounded-full bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-200 px-2 py-0.5">
+              ID: {row.noticeId}
+            </span>
+          )}
+          {row.published && (
+            <span className="rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 px-2 py-0.5">
+              Pubbl.: {row.published}
+            </span>
+          )}
+          {row.deadline && (
+            <span className="rounded-full bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-200 px-2 py-0.5">
+              Scad.: {row.deadline}
+            </span>
+          )}
+          {row.cpv && (
+            <Badge
+              variant="secondary"
+              className="rounded-full text-[11px] bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-200"
+            >
+              CPV {row.cpv}
+            </Badge>
+          )}
+        </div>
+
+        {row.description && (
+          <p className="mt-3 text-[13px] text-muted-foreground line-clamp-3">
+            {row.description}
+          </p>
+        )}
+
+        {row.value && (
+          <div className="mt-3 text-sm font-semibold">
+            <span className="inline-flex items-center rounded-lg bg-emerald-600/10 px-2 py-1">
+              <span className="mr-1.5 h-2 w-2 rounded-full bg-emerald-600" />
+              {fmtMoney(row.value)}
+            </span>
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {pdfUrl && (
+            <Button asChild size="sm" variant="default" className="gap-1">
+              <Link href={pdfUrl} target="_blank" rel="noopener">
+                {pdfLabel} <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          )}
+          {tedUrl && (
+            <Button asChild size="sm" variant="secondary" className="gap-1">
+              <Link href={tedUrl} target="_blank" rel="noopener">
+                Apri su TED <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* -------------------------------------------------------
+ * Chat page (Home)
+ * ----------------------------------------------------- */
+type ChatMsg = { role: "user" | "assistant"; content: string };
+
+export default function TenderAgentChatPage() {
+  const [threadId] = useState(() => crypto.randomUUID());
+  const [messages, setMessages] = useState<ChatMsg[]>([
+    {
+      role: "assistant",
+      content:
+        "Ciao! Sono il tuo Tender Agent. Chiedimi bandi (es: *trova bandi informatica pubblicati oggi in Italia*).",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    scrollerRef.current?.scrollTo({
+      top: scrollerRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages]);
+
+  async function send(text?: string) {
+    const content = (text ?? input).trim();
+    if (!content) return;
+
+    console.log("➡️ POST /agentChat", {
+      baseUrl: BASE_URL,
+      threadId,
+      message: content.slice(0, 500),
+    });
+
+    setMessages((prev) => [...prev, { role: "user", content }]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const data = await fetchJSON<{ messages: any[] }>(
+        `${BASE_URL}/agentChat`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            messages: [{ role: "user", content }],
+            thread_id: threadId,
+          }),
+        }
+      );
+
+      console.log(
+        "⬅️ /agentChat raw response (trimmed):",
+        JSON.stringify(data)?.slice(0, 2000)
+      );
+
+      const assistant = pickLastAssistantMessage(data.messages);
+      if (assistant && assistant.content) {
+        setMessages((prev) => [...prev, assistant]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              "Ho ricevuto la risposta dal backend, ma non c'era testo da mostrare.",
+          },
+        ]);
+      }
+    } catch (e: any) {
+      console.error("💥 /agentChat error:", e?.stack || e?.message || e);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Errore: ${e?.message || e}` },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function pickLastAssistantMessage(
+    raw: any[]
+  ): { role: "assistant"; content: string } | null {
+    if (!Array.isArray(raw)) return null;
+    for (let i = raw.length - 1; i >= 0; i--) {
+      const m = raw[i];
+      const role = m?.role ?? m?._getType?.() ?? m?.type;
+      const asst =
+        role === "assistant" ||
+        role === "ai" ||
+        role === "AIMessages" ||
+        role === "tool" ||
+        m?.name === "agent";
+      if (asst) {
+        const text = toPlainText(m?.content);
+        if (text) return { role: "assistant", content: text };
+      }
+    }
+    const joined = raw
+      .map((m) => toPlainText(m?.content))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return joined ? { role: "assistant", content: joined } : null;
+  }
+
+  const suggestions = [
+    "trova bandi informatica pubblicati oggi in Italia",
+    "mostra bandi con scadenza entro 7 giorni in Lombardia",
+    "riassumi i bandi più recenti (max 5)",
+  ];
+
+  const firstUserIndex = React.useMemo(
+    () => messages.findIndex((m) => m.role === "user"),
+    [messages]
+  );
+
+  const showSuggestions =
+    firstUserIndex === -1 ||
+    (messages[messages.length - 1]?.role === "assistant" &&
+      input.trim() === "");
+
+  return (
+    // Full-viewport layout with safe-area handling
+    <div className="flex h-dvh w-full flex-col bg-background text-foreground">
+      {/* Sticky header */}
+      <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bot className="h-6 w-6" aria-hidden />
+              <h1 className="text-lg sm:text-xl font-semibold tracking-tight">
+                Tender Agent (EUROPE)
+              </h1>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setMessages([
+                    {
+                      role: "assistant",
+                      content:
+                        "Nuova chat. Dimmi cosa cerchi (es: *software* in *Lazio* pubblicati *oggi*).",
+                    },
+                  ])
+                }
+              >
+                <RefreshCcw className="h-4 w-4 mr-1" />
+                Nuova chat
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main area */}
+      <main className="flex-1 overflow-hidden">
+        <div className="mx-auto h-full w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+          {/* Chat container fills remaining space */}
+          <div className="mt-4 flex h-[calc(100dvh-4rem-4.5rem)] flex-col rounded-2xl border bg-muted/20 p-3 sm:p-4">
+            {/* Stream (scrollable) */}
+            <div
+              ref={scrollerRef}
+              className="flex-1 overflow-y-auto rounded-xl bg-background/60 p-2 sm:p-3"
+            >
+              <div className="space-y-3">
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`flex ${
+                      m.role === "user" ? "justify-end" : "justify-start"
+                    }`}
+                  >
+                    <div
+                      className={`rounded-2xl px-3 py-2 text-sm  ${
+                        m.role === "user"
+                          ? "bg-primary text-primary-foreground shadow"
+                          : " "
+                      }`}
+                    >
+                      {m.role === "assistant" ? (
+                        <AssistantMessage text={m.content} />
+                      ) : (
+                        <span>{m.content}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {showSuggestions && (
+                  <SuggestionChips
+                    suggestions={suggestions}
+                    onPick={(s) => !loading && send(s)}
+                    disabled={loading}
+                  />
+                )}
+
+                {loading && (
+                  <div className="flex justify-start">
+                    <div className="bg-background border rounded-2xl px-3 py-2 text-sm shadow inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Sto cercando bandi…
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Composer (sticky within container bottom) */}
+            <div className="sticky bottom-0 mt-3 rounded-xl border bg-background/80 p-2 sm:p-3 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Scrivi la tua richiesta (Invio per inviare)…"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  className="min-h-10"
+                  aria-label="Messaggio per Tender Agent"
+                />
+                <Button
+                  onClick={() => send()}
+                  disabled={loading}
+                  className="min-h-10"
+                  aria-label="Invia messaggio"
+                >
+                  {loading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ArrowRight className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              {/* Safe-area padding for iOS home indicator */}
+              <div className="pb-[env(safe-area-inset-bottom)]" />
+            </div>
+          </div>
         </div>
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
     </div>
   );
 }
