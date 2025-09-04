@@ -1,7 +1,47 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# -------------------------------------------------------
+# Logs
+# -------------------------------------------------------
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+firebase-debug.log*
+firebase-debug.*.log*
+.pnpm-debug.log*
 
-# dependencies
+# -------------------------------------------------------
+# Firebase
+# -------------------------------------------------------
+.firebase/
+.firebaserc.local
+# Uncomment if each dev should have their own Firebase project
+# .firebaserc
+.dataconnect
+
+# -------------------------------------------------------
+# Runtime data
+# -------------------------------------------------------
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# -------------------------------------------------------
+# Coverage / Testing
+# -------------------------------------------------------
+lib-cov
+coverage
+.nyc_output
+.grunt
+/coverage
+
+# -------------------------------------------------------
+# Dependencies
+# -------------------------------------------------------
+node_modules/
 /node_modules
+bower_components
 /.pnp
 .pnp.*
 .yarn/*
@@ -9,36 +49,44 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+.npm
+.yarn-integrity
 
-# testing
-/coverage
-
-# next.js
+# -------------------------------------------------------
+# Build Artifacts
+# -------------------------------------------------------
+build/Release
+/build
 /.next/
 /out/
 
-# production
-/build
+# -------------------------------------------------------
+# Config / Cache
+# -------------------------------------------------------
+.eslintcache
+.lock-wscript
 
-# misc
+# -------------------------------------------------------
+# Misc
+# -------------------------------------------------------
 .DS_Store
 *.pem
+*.tgz
+.node_repl_history
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
+# -------------------------------------------------------
+# Environment Variables
+# -------------------------------------------------------
+.env
 .env*
 
-# vercel
+# -------------------------------------------------------
+# Vercel
+# -------------------------------------------------------
 .vercel
 
-.firebase/
-.firebaserc.local
-
-# typescript
+# -------------------------------------------------------
+# TypeScript
+# -------------------------------------------------------
 *.tsbuildinfo
 next-env.d.ts
