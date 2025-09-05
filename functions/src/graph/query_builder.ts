@@ -4,8 +4,8 @@ import { z } from "zod";
 const QueryIntent = z.object({
   country: z.string().default("ITA"),
   daysBack: z.number().int().min(0).max(30).default(3),
-  cpv: z.array(z.string()).optional(), // e.g., ["90911200"]
-  text: z.string().optional(), // free keywords
+  cpv: z.array(z.string()).optional(),
+  text: z.string().optional(),
 });
 
 export const buildTedExpertQueryTool = safeTool({
@@ -25,10 +25,8 @@ export const buildTedExpertQueryTool = safeTool({
       );
     }
     if (text && text.trim()) {
-      // "title" and "description" fuzzy match:
-      parts.push(
-        `(title ~ "${text.trim()}" OR description-proc ~ "${text.trim()}")`
-      );
+      const t = text.trim().replace(/"/g, '\\"');
+      parts.push(`(notice-title ~ "${t}" OR description-proc ~ "${t}")`);
     }
     return parts.join(" AND ");
   },

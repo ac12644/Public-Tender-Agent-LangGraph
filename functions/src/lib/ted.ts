@@ -1,3 +1,5 @@
+import type { UserProfile } from "./models";
+
 type TedSearchResponse = {
   notices?: any[];
   totalNoticeCount?: number;
@@ -102,4 +104,51 @@ export async function tedFetchXML(publicationNumber: string) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch XML ${publicationNumber}`);
   return await res.text();
+}
+
+export function scoreTenderForProfile(n: any, profile: UserProfile): number {
+  let score = 0;
+
+  // CPV match (peso alto)
+  const cpvArr = Array.isArray(n["classification-cpv"])
+    ? n["classification-cpv"]
+    : n["classification-cpv"]
+    ? [n["classification-cpv"]]
+    : [];
+  const hasCpvMatch = profile.cpv.some((code) => cpvArr.includes(code));
+  score += hasCpvMatch ? 0.45 : 0;
+
+  // Region (greedy per semplice demo: cerca occorrenza regione in buyer-name/title)
+  const text = [
+    n["buyer-name"]?.ita?.join(" ") || "",
+    n["notice-title"]?.ita || n["notice-title"]?.eng || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  const hasRegion = profile.regions.some((r) => text.includes(r.toLowerCase()));
+  score += hasRegion ? 0.2 : 0;
+
+  // Valore minimo
+  const value =
+    typeof n["total-value"] === "number"
+      ? n["total-value"]
+      : typeof n["estimated-value-glo"] === "number"
+      ? n["estimated-value-glo"]
+      : null;
+  if (profile.minValueEUR && value != null) {
+    if (value >= profile.minValueEUR) score += 0.15;
+  }
+
+  // Recency (publication-date entro daysBack)
+  const pub = Array.isArray(n["publication-date"])
+    ? n["publication-date"][0]
+    : n["publication-date"];
+  const pubDate = pub ? new Date(pub) : null;
+  if (pubDate) {
+    const days = profile.daysBack ?? 3;
+    const diff = (Date.now() - pubDate.getTime()) / 86400000;
+    if (diff <= days + 0.5) score += 0.2;
+  }
+
+  return Math.max(0, Math.min(1, score));
 }

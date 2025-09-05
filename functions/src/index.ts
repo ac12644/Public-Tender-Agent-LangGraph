@@ -6,8 +6,7 @@ import {
   AIMessage,
 } from "@langchain/core/messages";
 import { app as graphApp } from "./graph/agent";
-import { tedPull } from "./jobs/pull";
-import { tendersProcess } from "./jobs/process";
+
 import {
   tendersCol,
   db,
@@ -17,7 +16,16 @@ import {
 } from "./lib/firestore";
 import { tedSearch } from "./lib/ted";
 import { GOOGLE_GENAI_API_KEY, OPENROUTER_API_KEY } from "./lib/llm";
+
+import { tedPull } from "./jobs/pull";
+import { tendersProcess } from "./jobs/process";
 export { tedPull, tendersProcess };
+export { preferences } from "./index.preferences";
+export { feed } from "./index.feed";
+export { exportCsv } from "./index.export";
+
+export { digestDaily } from "./index.digest";
+export { events } from "./index.events";
 
 /* ---------------- CORS ---------------- */
 function setCors(res: any) {
@@ -305,22 +313,23 @@ export const tendersSearch = onRequest(
           daysBack
         )} AND publication-date <= today())`,
       ];
-      if (Array.isArray(cpv) && cpv.length)
+      if (Array.isArray(cpv) && cpv.length) {
         parts.push(
           `(${cpv
             .map((c: string) => `classification-cpv = "${c}"`)
             .join(" OR ")})`
         );
-      if (text?.trim())
-        parts.push(
-          `(title ~ "${text.trim()}" OR description-proc ~ "${text.trim()}")`
-        );
+      }
+      if (text?.trim()) {
+        const t = text.trim().replace(/"/g, '\\"');
+        parts.push(`(notice-title ~ "${t}" OR description-proc ~ "${t}")`);
+      }
       const q = parts.join(" AND ");
 
       const pickDate = (d?: string | string[]) => {
         const raw = Array.isArray(d) ? d[0] : d;
         if (!raw) return undefined;
-        return raw.replace(/T\d{2}:\d{2}:\d{2}.*$/, "").replace(/\+.*/, ""); // -> YYYY-MM-DD
+        return raw.replace(/T\d{2}:\d{2}:\d{2}.*$/, "").replace(/\+.*/, "");
       };
 
       const pickPdfITorEN = (links?: any) => {
@@ -328,6 +337,7 @@ export const tendersSearch = onRequest(
         const en = links?.pdf?.ENG || links?.pdf?.en;
         return it || en || null;
       };
+
       const notices = await tedSearch({
         q,
         limit: Math.min(Number(limit), 50),
@@ -335,7 +345,7 @@ export const tendersSearch = onRequest(
 
       const rows = notices.map((n: any) => {
         const pub = String(n["publication-number"] ?? "");
-        const noticeId = pub; // URL key
+        const noticeId = pub;
         const buyer =
           n["buyer-name"]?.ita?.[0] ??
           n["buyer-name"]?.eng?.[0] ??
@@ -356,7 +366,6 @@ export const tendersSearch = onRequest(
           : [];
         const cpv = cpvArr[0] ?? "";
 
-        // keep numeric; FE will format
         const value =
           typeof n["total-value"] === "number"
             ? n["total-value"]
@@ -378,10 +387,6 @@ export const tendersSearch = onRequest(
         };
       });
 
-      console.log(
-        "🔎 mapped rows for chat/table:",
-        JSON.stringify(rows, null, 2)
-      );
       res.json({ rows });
     } catch (e: any) {
       console.error(e);

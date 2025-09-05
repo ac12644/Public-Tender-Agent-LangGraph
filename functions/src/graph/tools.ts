@@ -6,9 +6,9 @@ import { tedSearch } from "../lib/ted";
 import { saveTenderSummary, saveMatchScore } from "../lib/firestore";
 import type { TenderDoc } from "../lib/types";
 
-/* -------------------- Shared Types -------------------- */
 export type TenderLite = {
   publicationNumber: string;
+  noticeId: string;
   title: string;
   buyer: string;
   publicationDate?: string;
@@ -20,12 +20,11 @@ export type TenderLite = {
   summary_en?: string | null;
 };
 
-/* -------------------- build_ted_query -------------------- */
 const QueryIntent = z.object({
   country: z.string().default("ITA"),
   daysBack: z.number().int().min(0).max(30).default(3),
-  cpv: z.array(z.string()).optional(), // e.g. ["90911200"]
-  text: z.string().optional(), // free keywords
+  cpv: z.array(z.string()).optional(),
+  text: z.string().optional(),
 });
 
 export const buildTedExpertQueryTool = safeTool({
@@ -41,19 +40,19 @@ export const buildTedExpertQueryTool = safeTool({
     ];
     if (cpv?.length) {
       parts.push(
-        `(${cpv.map((c) => `classification-cpv = "${c}"`).join(" OR ")})`
+        `(${cpv
+          .map((c) => `classification-cpv = "${c.endsWith("*") ? c : c + "*"}"`)
+          .join(" OR ")})`
       );
     }
     if (text && text.trim()) {
-      parts.push(
-        `(title ~ "${text.trim()}" OR description-proc ~ "${text.trim()}")`
-      );
+      const t = text.trim().replace(/"/g, '\\"');
+      parts.push(`(notice-title ~ "${t}" OR description-proc ~ "${t}")`);
     }
     return parts.join(" AND ");
   },
 });
 
-/* -------------------- search_tenders -------------------- */
 const SearchTendersInput = z.object({
   q: z.string().min(1),
   limit: z.number().int().min(1).max(50).default(10),
@@ -69,17 +68,13 @@ function pickPdfItaOrEn(links: any): string | undefined {
   const pdf = links?.pdf;
   if (!pdf || typeof pdf !== "object") return undefined;
   const keys = Object.keys(pdf);
-
-  // prefer Italian ('it' or 'ita'), then English ('en' or 'eng'), case-insensitive
   const find = (tags: string[]) =>
     keys.find((k) => {
       const low = k.toLowerCase();
       return tags.some((t) => low === t || low.startsWith(t));
     });
-
   const itKey = find(["it", "ita"]);
   const enKey = find(["en", "eng"]);
-
   const val = firstString(itKey ? pdf[itKey] : enKey ? pdf[enKey] : undefined);
   return val;
 }
@@ -91,24 +86,16 @@ export const searchTendersTool = safeTool({
   schema: SearchTendersInput,
   fn: async ({ q, limit }) => {
     const notices = await tedSearch({ q, limit });
-
-    console.log("🔎 Raw notice sample:", JSON.stringify(notices[0], null, 2));
-    console.log("🔑 Keys in notice:", Object.keys(notices[0] || {}));
-
     return notices.map((n: any) => {
-      // description candidates (for the agent to summarise in Italian)
       const desc_it =
         n["description-proc"]?.ita ?? n["description-glo"]?.ita ?? null;
-
       const desc_en =
         n["description-proc"]?.eng ??
         n["description-proc"]?.en ??
         n["description-glo"]?.eng ??
         n["description-glo"]?.en ??
         null;
-
       const pdfItaOrEn = pickPdfItaOrEn(n.links);
-
       return {
         publicationNumber: String(n["publication-number"] ?? ""),
         noticeId: n["notice-identifier"] ?? n["publication-number"] ?? "",
@@ -126,12 +113,9 @@ export const searchTendersTool = safeTool({
         deadline: n["deadline-date-lot"] ?? null,
         cpv: n["classification-cpv"] ?? null,
         links: n.links ?? null,
-
-        // NEW: helper fields for the agent to follow your prompt
-        pdf_preferred: pdfItaOrEn, // <- Italian PDF if available, else English
-        description_proposed_it: desc_it, // <- IT text candidate to summarise
-        description_proposed_en: desc_en, // <- EN fallback if IT missing
-
+        pdf_preferred: pdfItaOrEn,
+        description_proposed_it: desc_it,
+        description_proposed_en: desc_en,
         summary_it: null,
         summary_en: null,
       };
@@ -139,7 +123,6 @@ export const searchTendersTool = safeTool({
   },
 });
 
-/* -------------------- save_tender_summary -------------------- */
 const SaveSummaryInput = z.object({
   tenderId: z.string().min(1),
   summary_it: z.string().optional(),
@@ -157,7 +140,6 @@ export const saveTenderSummaryTool = safeTool({
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, max) || null;
-
     await saveTenderSummary(tenderId, {
       summary_it: clean(summary_it, 600),
       summary_en: clean(summary_en, 220),
@@ -166,7 +148,6 @@ export const saveTenderSummaryTool = safeTool({
   },
 });
 
-/* -------------------- save_match_score -------------------- */
 const SaveScoreInput = z.object({
   companyId: z.string().min(1),
   tenderId: z.string().min(1),
@@ -183,7 +164,6 @@ export const saveMatchScoreTool = safeTool({
   },
 });
 
-/* -------------------- get_current_date (server) -------------------- */
 export const currentDateTool = new DynamicStructuredTool({
   name: "get_current_date",
   description:
