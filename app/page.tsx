@@ -1,20 +1,22 @@
 "use client";
 
 import * as React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   ArrowRight,
   Bot,
   ExternalLink,
   Loader2,
   RefreshCcw,
+  Settings2,
+  Star,
 } from "lucide-react";
 
 /* -------------------------------------------------------
@@ -23,53 +25,40 @@ import {
 const BASE_URL = process.env.NEXT_PUBLIC_TENDER_API_BASE ?? "";
 
 /* -------------------------------------------------------
- * Helpers
+ * UID (puoi sostituire con Firebase Auth)
  * ----------------------------------------------------- */
-async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return (await res.json()) as T;
+function getOrCreateUID(): string {
+  if (typeof window === "undefined") return "anon";
+  const key = "tender_uid";
+  let uid = localStorage.getItem(key);
+  if (!uid) {
+    uid = crypto.randomUUID();
+    localStorage.setItem(key, uid);
+  }
+  return uid;
 }
 
-type BackendRole =
-  | "user"
-  | "assistant"
-  | "ai"
-  | "tool"
-  | "system"
-  | "developer";
-type UnknownRecord = Record<string, unknown>;
-
-interface BackendMessage {
-  role?: BackendRole;
+/* -------------------------------------------------------
+ * Helpers
+ * ----------------------------------------------------- */
+type BackendMessage = {
+  role?: string;
   type?: string;
   name?: string;
   content?: unknown;
   _getType?: () => string;
-}
-
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === "object" && v !== null;
-}
+};
 
 function toPlainText(content: unknown): string {
   if (typeof content === "string") return content;
-
   if (Array.isArray(content)) {
-    return content
+    return (content as any[])
       .map((p) => {
         if (typeof p === "string") return p;
-        if (isRecord(p)) {
-          const t = p["text"];
-          const c = p["content"];
-          const v = p["value"];
+        if (p && typeof p === "object") {
+          const t = (p as any).text;
+          const c = (p as any).content;
+          const v = (p as any).value;
           if (typeof t === "string") return t;
           if (typeof c === "string") return c;
           if (typeof v === "string") return v;
@@ -80,10 +69,9 @@ function toPlainText(content: unknown): string {
       .join("\n")
       .trim();
   }
-
-  if (isRecord(content)) {
-    const t = content["text"];
-    const c = content["content"];
+  if (content && typeof content === "object") {
+    const t = (content as any).text;
+    const c = (content as any).content;
     if (typeof t === "string") return t;
     if (typeof c === "string") return c;
     try {
@@ -101,51 +89,7 @@ function cleanAssistantText(s: string): string {
   return withoutToolBlocks.replace(/\n{3,}/g, "\n\n");
 }
 
-function SuggestionChips({
-  suggestions,
-  onPick,
-  disabled,
-}: {
-  suggestions: string[];
-  onPick: (s: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="flex justify-end">
-      <div className={["relative max-w-[85%] ", "px-3 py-2"].join(" ")}>
-        <div className="flex flex-col gap-2">
-          {suggestions.map((s, i) => (
-            <Button
-              key={s}
-              type="button"
-              size="sm"
-              variant="ghost"
-              aria-label={`Suggerimento ${i + 1}: ${s}`}
-              className={[
-                "w-full justify-start",
-                "rounded-lg",
-                "border border-border/60",
-                "bg-background hover:bg-muted",
-                "text-foreground",
-                "cursor-pointer",
-                "px-3 py-2",
-                "shadow-sm transition-transform",
-                "hover:-translate-y-0.5 active:translate-y-0",
-                "focus-visible:ring-2 focus-visible:ring-primary/40",
-              ].join(" ")}
-              onClick={() => onPick(s)}
-              disabled={!!disabled}
-            >
-              {s}
-            </Button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------- Parse compact markdown table the agent returns -------- */
+/* -------- Parse tabella compatta in card bandi -------- */
 type ParsedTenderRow = {
   pubno: string;
   noticeId?: string;
@@ -242,103 +186,94 @@ function fmtMoney(input?: string | number | null): string {
       minimumFractionDigits: 2,
     }).format(input);
   }
-
-  let s = String(input)
-    .replace(/\u00A0/g, " ")
-    .replace(/[€\s]|EUR|EURO/gi, "")
-    .trim();
-
-  s = s.replace(/\s+/g, "");
-  if (!s) return "—";
-
-  const hasComma = s.includes(",");
-  const hasDot = s.includes(".");
-  let normalized = s;
-
-  const onlyDigitsAndSep = s.replace(/[^\d.,-]/g, "");
-  if (onlyDigitsAndSep !== s) normalized = onlyDigitsAndSep;
-
-  const toNumber = (str: string) => {
-    const n = Number(str);
-    return isNaN(n) ? NaN : n;
-  };
-
-  if (hasComma && hasDot) {
-    const lastComma = normalized.lastIndexOf(",");
-    const lastDot = normalized.lastIndexOf(".");
-    if (lastComma > lastDot) {
-      normalized = normalized.replace(/\./g, "").replace(",", ".");
-    } else {
-      normalized = normalized.replace(/,/g, "");
-    }
-  } else if (hasComma) {
-    const parts = normalized.split(",");
-    const fractional = parts[1] ?? "";
-    if (fractional.length === 0) normalized = normalized.replace(/,/g, "");
-    else if (fractional.length <= 2) normalized = normalized.replace(",", ".");
-    else normalized = normalized.replace(/,/g, "");
-  } else if (hasDot) {
-    const parts = normalized.split(".");
-    const fractional = parts[1] ?? "";
-    if (fractional.length === 0) normalized = normalized.replace(/\./g, "");
-    else if (fractional.length <= 2) {
-      const lastDot = normalized.lastIndexOf(".");
-      normalized =
-        normalized.slice(0, lastDot).replace(/\./g, "") +
-        "." +
-        normalized.slice(lastDot + 1);
-    } else {
-      normalized = normalized.replace(/\./g, "");
-    }
-  }
-
-  const value = toNumber(normalized);
-  if (isNaN(value)) {
-    const digitsOnly = normalized.replace(/[^\d-]/g, "");
-    const v = toNumber(digitsOnly);
-    if (isNaN(v)) return String(input).trim();
-    return new Intl.NumberFormat("it-IT", {
-      style: "currency",
-      currency: "EUR",
-      minimumFractionDigits: 2,
-    }).format(v);
-  }
-
-  return new Intl.NumberFormat("it-IT", {
-    style: "currency",
-    currency: "EUR",
-    minimumFractionDigits: 2,
-  }).format(value);
+  return String(input);
 }
 
 /* -------------------------------------------------------
- * Message bubbles
+ * Suggerimenti “intelligenti” locali
  * ----------------------------------------------------- */
-function AssistantMessage({ text }: { text: string }) {
-  const parsed = React.useMemo(
-    () => parseTendersFromMarkdownTable(text),
-    [text]
-  );
+const SUGG_KEY = "tender_last_prompts";
 
-  if (parsed.length > 0) {
-    return (
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {parsed.map((r, i) => (
-          <AssistantTenderCard key={`${r.noticeId || r.pubno}-${i}`} row={r} />
-        ))}
-      </div>
-    );
+function rememberPrompt(p: string) {
+  try {
+    const raw = localStorage.getItem(SUGG_KEY);
+    const arr = raw ? (JSON.parse(raw) as string[]) : [];
+    const out = [p, ...arr.filter((x) => x !== p)].slice(0, 6);
+    localStorage.setItem(SUGG_KEY, JSON.stringify(out));
+  } catch {}
+}
+
+function loadSuggestions(): string[] {
+  try {
+    const raw = localStorage.getItem(SUGG_KEY);
+    const arr = raw ? (JSON.parse(raw) as string[]) : [];
+    // seed di base in mancanza di storico
+    const seed = [
+      "trova bandi informatica pubblicati oggi in Italia",
+      "mostra bandi con scadenza entro 7 giorni in Lombardia",
+      "riassumi i bandi più recenti (max 5)",
+    ];
+    return arr.length ? arr : seed;
+  } catch {
+    return [
+      "trova bandi informatica pubblicati oggi in Italia",
+      "mostra bandi con scadenza entro 7 giorni in Lombardia",
+      "riassumi i bandi più recenti (max 5)",
+    ];
   }
+}
+
+/* -------------------------------------------------------
+ * UI semplici
+ * ----------------------------------------------------- */
+function SuggestionChips({
+  suggestions,
+  onPick,
+  disabled,
+}: {
+  suggestions: string[];
+  onPick: (s: string) => void;
+  disabled?: boolean;
+}) {
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {cleanAssistantText(text)}
-      </ReactMarkdown>
+    <div className="flex justify-end">
+      <div className="relative max-w-[85%] px-3 py-2">
+        <div className="flex flex-col gap-2">
+          {suggestions.map((s, i) => (
+            <Button
+              key={s + i}
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label={`Suggerimento ${i + 1}: ${s}`}
+              className={[
+                "w-full justify-start",
+                "rounded-lg",
+                "border border-border/60",
+                "bg-background hover:bg-muted",
+                "text-foreground",
+                "cursor-pointer",
+                "px-3 py-2",
+                "shadow-sm transition-transform",
+                "hover:-translate-y-0.5 active:translate-y-0",
+                "focus-visible:ring-2 focus-visible:ring-primary/40",
+              ].join(" ")}
+              onClick={() => onPick(s)}
+              disabled={!!disabled}
+            >
+              {s}
+            </Button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-function AssistantTenderCard({ row }: { row: ParsedTenderRow }) {
+/* -------------------------------------------------------
+ * Card bando (riuso della tabella compatta)
+ * ----------------------------------------------------- */
+function TenderCard({ row }: { row: ParsedTenderRow }) {
   const idForUrl = row.noticeId || row.pubno;
   const tedUrl = idForUrl
     ? `https://ted.europa.eu/it/notice/-/detail/${encodeURIComponent(idForUrl)}`
@@ -366,11 +301,6 @@ function AssistantTenderCard({ row }: { row: ParsedTenderRow }) {
           {row.pubno && (
             <span className="rounded-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200 px-2 py-0.5">
               PubNo: {row.pubno}
-            </span>
-          )}
-          {row.noticeId && (
-            <span className="rounded-full bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-200 px-2 py-0.5">
-              ID: {row.noticeId}
             </span>
           )}
           {row.published && (
@@ -410,7 +340,7 @@ function AssistantTenderCard({ row }: { row: ParsedTenderRow }) {
 
         <div className="mt-4 flex flex-wrap gap-2">
           {pdfUrl && (
-            <Button asChild size="sm" variant="default" className="gap-1">
+            <Button asChild size="sm" className="gap-1">
               <Link href={pdfUrl} target="_blank" rel="noopener">
                 {pdfLabel} <ExternalLink className="h-3.5 w-3.5" />
               </Link>
@@ -430,33 +360,67 @@ function AssistantTenderCard({ row }: { row: ParsedTenderRow }) {
 }
 
 /* -------------------------------------------------------
- * Chat page (Home)
+ * Messaggi Chat
  * ----------------------------------------------------- */
 type ChatMsg = { role: "user" | "assistant"; content: string };
 
-export default function TenderAgentChatPage() {
+function AssistantMessage({ text }: { text: string }) {
+  const parsed = React.useMemo(
+    () => parseTendersFromMarkdownTable(text),
+    [text]
+  );
+
+  if (parsed.length > 0) {
+    return (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {parsed.map((r, i) => (
+          <TenderCard key={`${r.noticeId || r.pubno}-${i}`} row={r} />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {cleanAssistantText(text)}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------
+ * Pagina principale
+ * ----------------------------------------------------- */
+export default function HomePage() {
+  const uid = useMemo(getOrCreateUID, []);
   const [threadId] = useState(() => crypto.randomUUID());
+
   const [messages, setMessages] = useState<ChatMsg[]>([
     {
       role: "assistant",
       content:
-        "Ciao! Sono il tuo Tender Agent. Chiedimi bandi (es: *trova bandi informatica pubblicati oggi in Italia*).",
+        "Ciao! Sono il tuo Tender Agent. Dimmi cosa cerchi (es: *software* oggi in *Lombardia*).",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
+  const [suggestions, setSuggestions] = useState<string[]>(loadSuggestions());
+
   useEffect(() => {
     scrollerRef.current?.scrollTo({
       top: scrollerRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages]);
+  }, [messages, loading]);
 
   async function send(text?: string) {
     const content = (text ?? input).trim();
     if (!content) return;
+
+    rememberPrompt(content);
+    setSuggestions(loadSuggestions());
 
     setMessages((prev) => [...prev, { role: "user", content }]);
     setInput("");
@@ -466,13 +430,19 @@ export default function TenderAgentChatPage() {
       interface AgentChatResponse {
         messages: BackendMessage[];
       }
-      const data = await fetchJSON<AgentChatResponse>(`${BASE_URL}/agentChat`, {
+      const res = await fetch(`${BASE_URL}/agentChat`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-id": uid,
+        },
         body: JSON.stringify({
           messages: [{ role: "user", content }],
           thread_id: threadId,
         }),
       });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as AgentChatResponse;
 
       const assistant = pickLastAssistantMessage(data.messages);
       if (assistant && assistant.content) {
@@ -487,14 +457,10 @@ export default function TenderAgentChatPage() {
           },
         ]);
       }
-    } catch (e: unknown) {
-      const msg =
-        typeof e === "object" && e !== null && "message" in e
-          ? String((e as { message?: unknown }).message)
-          : String(e);
+    } catch (e: any) {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Errore: ${msg}` },
+        { role: "assistant", content: `Errore: ${e?.message ?? String(e)}` },
       ]);
     } finally {
       setLoading(false);
@@ -527,12 +493,6 @@ export default function TenderAgentChatPage() {
     return joined ? { role: "assistant", content: joined } : null;
   }
 
-  const suggestions = [
-    "trova bandi informatica pubblicati oggi in Italia",
-    "mostra bandi con scadenza entro 7 giorni in Lombardia",
-    "riassumi i bandi più recenti (max 5)",
-  ];
-
   const firstUserIndex = React.useMemo(
     () => messages.findIndex((m) => m.role === "user"),
     [messages]
@@ -544,19 +504,18 @@ export default function TenderAgentChatPage() {
       input.trim() === "");
 
   return (
-    // Full-viewport layout with safe-area handling
     <div className="flex h-dvh w-full flex-col bg-background text-foreground">
-      {/* Sticky header */}
-      <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot className="h-6 w-6" aria-hidden />
-              <h1 className="text-lg sm:text-xl font-semibold tracking-tight">
-                Tender Agent (EUROPE)
-              </h1>
+      {/* Corpo */}
+      <main className="flex-1 overflow-hidden">
+        <div className="mx-auto h-full w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="sm:col-span-2 text-sm text-muted-foreground">
+              Chiedi bandi in linguaggio naturale. Esempio:{" "}
+              <span className="text-foreground italic">
+                “trova bandi pulizia in Lombardia pubblicati oggi”
+              </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-end gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -569,21 +528,17 @@ export default function TenderAgentChatPage() {
                     },
                   ])
                 }
+                className="gap-1"
               >
-                <RefreshCcw className="h-4 w-4 mr-1" />
+                <RefreshCcw className="h-4 w-4" />
                 Nuova chat
               </Button>
             </div>
           </div>
-        </div>
-      </header>
 
-      {/* Main area */}
-      <main className="flex-1 overflow-hidden">
-        <div className="mx-auto h-full w-full max-w-6xl px-4 sm:px-6 lg:px-8">
-          {/* Chat container fills remaining space */}
-          <div className="mt-4 flex h-[calc(100dvh-4rem-4.5rem)] flex-col rounded-2xl border bg-muted/20 p-3 sm:p-4">
-            {/* Stream (scrollable) */}
+          {/* Contenitore chat */}
+          <div className="mt-3 flex h-[calc(100dvh-4rem-6.5rem)] flex-col rounded-2xl border bg-muted/20 p-3 sm:p-4">
+            {/* Stream */}
             <div
               ref={scrollerRef}
               className="flex-1 overflow-y-auto rounded-xl bg-background/60 p-2 sm:p-3"
@@ -597,10 +552,10 @@ export default function TenderAgentChatPage() {
                     }`}
                   >
                     <div
-                      className={`rounded-2xl px-3 py-2 text-sm  ${
+                      className={`rounded-2xl px-3 py-2 text-sm ${
                         m.role === "user"
                           ? "bg-primary text-primary-foreground shadow"
-                          : " "
+                          : ""
                       }`}
                     >
                       {m.role === "assistant" ? (
@@ -631,7 +586,7 @@ export default function TenderAgentChatPage() {
               </div>
             </div>
 
-            {/* Composer (sticky within container bottom) */}
+            {/* Composer */}
             <div className="sticky bottom-0 mt-3 rounded-xl border bg-background/80 p-2 sm:p-3 backdrop-blur supports-[backdrop-filter]:bg-background/60">
               <div className="flex items-center gap-2">
                 <Input
@@ -660,7 +615,6 @@ export default function TenderAgentChatPage() {
                   )}
                 </Button>
               </div>
-              {/* Safe-area padding for iOS home indicator */}
               <div className="pb-[env(safe-area-inset-bottom)]" />
             </div>
           </div>
