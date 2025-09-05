@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     // on first load, ensure at least anonymous user exists
-    let unsub = watchUser(async (u) => {
+    const unsub = watchUser(async (u) => {
       setUser(u);
       setLoading(false);
       setIdToken(u ? await u.getIdToken() : null);
