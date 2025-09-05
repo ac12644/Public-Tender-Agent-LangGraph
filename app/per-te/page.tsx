@@ -289,13 +289,9 @@ export default function PersonalizedFeedPage() {
     return data;
   }, [rows, prefs, query, minValueFilter]);
 
-  const loadMore = () => {
-    setPageSize((s) => Math.min(s + 120, 1000));
-  };
-
-  const loadAll = () => {
-    setPageSize(1000);
-  };
+  const MAX_API = 250;
+  const loadMore = () => setPageSize((s) => Math.min(s + 120, MAX_API));
+  const loadAll = () => setPageSize(MAX_API);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-6">
@@ -382,7 +378,8 @@ export default function PersonalizedFeedPage() {
               Carica tutti
             </Button>
             <span className="text-xs text-muted-foreground">
-              Mostrati {filtered.length} / {rows.length} (limite {pageSize})
+              Mostrati {filtered.length} / {rows.length} (limite {pageSize} /
+              250)
             </span>
           </div>
         </>

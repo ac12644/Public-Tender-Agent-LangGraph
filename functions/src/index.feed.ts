@@ -50,8 +50,11 @@ export const feed = onRequest(
       const prof = await db.collection("profiles").doc(uid).get();
       const prefs = ((prof.exists ? prof.data() : {}) ?? {}) as Prefs;
       const q = qpFromPrefs(prefs);
-      const cap = 1000;
-      const limit = Math.min(Number(req.query.limit ?? 60), cap);
+      const API_CAP = 250;
+      const asked = Number(req.query.limit ?? 60);
+      const limit = Number.isFinite(asked)
+        ? Math.min(Math.max(asked, 1), API_CAP)
+        : 60;
       const notices = await tedSearch({ q, limit });
       const since = new Date(Date.now() - 14 * 24 * 3600 * 1000);
       const evSnap = await db
