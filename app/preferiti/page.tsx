@@ -1,14 +1,23 @@
 "use client";
+
 import * as React from "react";
-import { ensureSignedIn } from "@/lib/firebaseClient";
-import { authedFetch } from "@/lib/authedFetch";
 import { Button } from "@/components/ui/button";
 import { TenderDialog } from "@/components/TenderDialog";
-import { trackEvent } from "@/lib/trackEvent";
-
-const API = process.env.NEXT_PUBLIC_TENDER_API_BASE!;
+import { useAuth } from "@/components/AuthProvider";
+import { db } from "@/lib/firebaseClient";
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  deleteDoc,
+  doc,
+  Timestamp,
+} from "firebase/firestore";
 
 type FavItem = {
+  id: string; // Firestore doc id
   tenderId: string;
   title?: string;
   buyer?: string;
@@ -16,35 +25,44 @@ type FavItem = {
   deadline?: string | null;
   cpv?: string | null;
   pdf?: string | null;
+  createdAt?: Timestamp | null;
 };
 
 export default function PreferitiPage() {
+  const { user, loading: authLoading, signInGoogle, isAnon } = useAuth();
   const [items, setItems] = React.useState<FavItem[]>([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    ensureSignedIn().then(load);
-    async function load() {
-      try {
-        const data = await authedFetch<{ items: FavItem[] }>(
-          `${API}/favorites`
-        );
-        setItems(data.items ?? []);
-      } finally {
-        setLoading(false);
-      }
-    }
-  }, []);
+    if (authLoading || !user) return;
 
-  async function remove(tenderId: string) {
-    await authedFetch(`${API}/favorites`, {
-      method: "DELETE",
-      body: JSON.stringify({ tenderId }),
-    });
-    setItems((prev) => prev.filter((x) => x.tenderId !== tenderId));
+    const q = query(
+      collection(db, "saved"),
+      where("uid", "==", user.uid),
+      orderBy("createdAt", "desc")
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: FavItem[] = snap.docs.map((d) => {
+          const data = d.data() as Omit<FavItem, "id">;
+          return { id: d.id, ...data };
+        });
+        setItems(list);
+        setLoading(false);
+      },
+      () => setLoading(false)
+    );
+
+    return () => unsub();
+  }, [authLoading, user]);
+
+  async function remove(item: FavItem) {
+    await deleteDoc(doc(db, "saved", item.id));
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="mx-auto max-w-5xl p-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => (
@@ -57,13 +75,25 @@ export default function PreferitiPage() {
   return (
     <div className="mx-auto max-w-5xl p-4">
       <h1 className="text-xl font-semibold">Preferiti</h1>
+
+      {isAnon && (
+        <div className="mt-3 mb-1 flex items-center justify-between rounded-lg border p-3 text-sm">
+          <span>
+            Accedi con Google per ritrovare i preferiti su tutti i dispositivi.
+          </span>
+          <Button size="sm" onClick={signInGoogle}>
+            Accedi con Google
+          </Button>
+        </div>
+      )}
+
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {items.map((r) => {
           const tedUrl = `https://ted.europa.eu/it/notice/-/detail/${encodeURIComponent(
             r.tenderId
           )}`;
           return (
-            <div key={r.tenderId} className="border rounded-xl p-3">
+            <div key={r.id} className="border rounded-xl p-3">
               <div className="text-sm font-semibold line-clamp-2">
                 {r.title ?? `Bando ${r.tenderId}`}
               </div>
@@ -88,26 +118,16 @@ export default function PreferitiPage() {
                 )}
               </div>
               <div className="mt-3 flex gap-2">
-                <TenderDialog tenderId={r.tenderId} baseUrl={API} />
-                <Button
-                  asChild
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    trackEvent("open_ted", r.tenderId, {
-                      referrer: "favorites",
-                    })
-                  }
-                >
+                <TenderDialog
+                  tenderId={r.tenderId}
+                  baseUrl={process.env.NEXT_PUBLIC_TENDER_API_BASE!}
+                />
+                <Button asChild size="sm" variant="secondary">
                   <a href={tedUrl} target="_blank" rel="noopener">
                     Apri su TED
                   </a>
                 </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => remove(r.tenderId)}
-                >
+                <Button size="sm" variant="outline" onClick={() => remove(r)}>
                   Rimuovi
                 </Button>
               </div>

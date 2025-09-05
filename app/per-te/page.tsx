@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useState } from "react";
 import Link from "next/link";
+import { useAuth } from "@/components/AuthProvider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,17 +17,6 @@ import {
 } from "lucide-react";
 
 const BASE_URL = process.env.NEXT_PUBLIC_TENDER_API_BASE ?? "";
-
-function getOrCreateUID(): string {
-  if (typeof window === "undefined") return "anon";
-  const key = "tender_uid";
-  let uid = localStorage.getItem(key);
-  if (!uid) {
-    uid = crypto.randomUUID();
-    localStorage.setItem(key, uid);
-  }
-  return uid;
-}
 
 type Row = {
   pubno: string;
@@ -53,7 +43,7 @@ type Prefs = {
 function normalize(s: string): string {
   return s
     .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
 }
@@ -168,11 +158,17 @@ function TenderCard({ r }: { r: Row }) {
 }
 
 function useFeedAndPrefs(pageSize: number) {
-  const uid = React.useMemo(getOrCreateUID, []);
+  const { uid, idToken } = useAuth();
+
   const [rows, setRows] = React.useState<Row[]>([]);
   const [prefs, setPrefs] = React.useState<Prefs | null>(null);
   const [loading, setLoading] = React.useState<boolean>(false);
   const [err, setErr] = React.useState<string | null>(null);
+
+  const headers: HeadersInit = {
+    "x-user-id": uid ?? "anon",
+    ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+  };
 
   const reload = React.useCallback(async () => {
     try {
@@ -180,11 +176,11 @@ function useFeedAndPrefs(pageSize: number) {
       setErr(null);
       const [prefRes, feedRes] = await Promise.all([
         fetch(`${BASE_URL}/preferences`, {
-          headers: { "x-user-id": uid },
+          headers,
           cache: "no-store",
         }),
         fetch(`${BASE_URL}/feed?limit=${pageSize}`, {
-          headers: { "x-user-id": uid },
+          headers,
           cache: "no-store",
         }),
       ]);
@@ -221,28 +217,50 @@ export default function PersonalizedFeedPage() {
   const [query, setQuery] = useState("");
   const [minValueFilter, setMinValueFilter] = useState<string>("");
 
+  function onlyDigits(s: string) {
+    return s.replace(/\D/g, "");
+  }
+  function cpvMatches(wanted: string[], have: string) {
+    const b = onlyDigits(have);
+    if (!b) return false;
+    if (!wanted.length) return true;
+    return wanted.some((w) => {
+      const a = onlyDigits(String(w));
+      if (!a) return false;
+      return b.startsWith(a) || a.startsWith(b);
+    });
+  }
+
   const filtered = React.useMemo(() => {
+    if (!rows.length) return rows;
+
     let data = rows;
+
     if (prefs) {
       const now = new Date();
-      const wantedRegions = (prefs.regions ?? []).map(normalize);
+      const wantedRegions = (prefs.regions ?? [])
+        .map(normalize)
+        .filter(Boolean);
       const wantedCpv = (prefs.cpv ?? [])
         .map((c) => String(c).trim())
         .filter(Boolean);
       const minVal = prefs.minValue == null ? null : Number(prefs.minValue);
       const days = Math.max(1, Number(prefs.daysBack ?? 7));
+
       data = data.filter((r) => {
         const buyerN = normalize(r.buyer || "");
         const titleN = normalize(r.title || "");
         const haystack = `${buyerN} ${titleN}`;
+
         const regionOk =
           wantedRegions.length === 0 ||
           wantedRegions.some((rg) => haystack.includes(rg));
+
         const cpvStr = (r.cpv ?? "").trim();
-        const cpvOk =
-          wantedCpv.length === 0 ||
-          (cpvStr !== "" && wantedCpv.some((w) => cpvStr.startsWith(w)));
+        const cpvOk = cpvMatches(wantedCpv, cpvStr);
+
         const valueOk = minVal == null || (r.value ?? 0) >= minVal;
+
         const dateOk = (() => {
           if (!r.published) return true;
           const d = new Date(r.published);
@@ -250,6 +268,7 @@ export default function PersonalizedFeedPage() {
           const diffDays = (now.getTime() - d.getTime()) / 86_400_000;
           return diffDays <= days + 0.5;
         })();
+
         return regionOk && cpvOk && valueOk && dateOk;
       });
     }
@@ -257,10 +276,10 @@ export default function PersonalizedFeedPage() {
     if (q) {
       data = data.filter(
         (r) =>
-          r.title.toLowerCase().includes(q) ||
-          r.buyer.toLowerCase().includes(q) ||
-          (r.cpv || "").toLowerCase().includes(q) ||
-          r.pubno.toLowerCase().includes(q)
+          (r.title ?? "").toLowerCase().includes(q) ||
+          (r.buyer ?? "").toLowerCase().includes(q) ||
+          (r.cpv ?? "").toLowerCase().includes(q) ||
+          (r.pubno ?? "").toLowerCase().includes(q)
       );
     }
     if (minValueFilter.trim() !== "") {
@@ -363,7 +382,7 @@ export default function PersonalizedFeedPage() {
               Carica tutti
             </Button>
             <span className="text-xs text-muted-foreground">
-              Mostrati {rows.length} / {pageSize}
+              Mostrati {filtered.length} / {rows.length} (limite {pageSize})
             </span>
           </div>
         </>

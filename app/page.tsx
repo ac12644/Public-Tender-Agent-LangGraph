@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useAuth } from "@/components/AuthProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -15,20 +16,6 @@ import { ArrowRight, ExternalLink, Loader2, RefreshCcw } from "lucide-react";
  * Config
  * ----------------------------------------------------- */
 const BASE_URL = process.env.NEXT_PUBLIC_TENDER_API_BASE ?? "";
-
-/* -------------------------------------------------------
- * UID (puoi sostituire con Firebase Auth)
- * ----------------------------------------------------- */
-function getOrCreateUID(): string {
-  if (typeof window === "undefined") return "anon";
-  const key = "tender_uid";
-  let uid = localStorage.getItem(key);
-  if (!uid) {
-    uid = crypto.randomUUID();
-    localStorage.setItem(key, uid);
-  }
-  return uid;
-}
 
 /* -------------------------------------------------------
  * Helpers
@@ -387,7 +374,7 @@ function AssistantMessage({ text }: { text: string }) {
  * Pagina principale
  * ----------------------------------------------------- */
 export default function HomePage() {
-  const uid = useMemo(getOrCreateUID, []);
+  const { uid, idToken, loading: authLoading } = useAuth();
   const [threadId] = useState(() => crypto.randomUUID());
 
   const [messages, setMessages] = useState<ChatMsg[]>([
@@ -425,12 +412,14 @@ export default function HomePage() {
       interface AgentChatResponse {
         messages: BackendMessage[];
       }
+      const headers: HeadersInit = {
+        "x-user-id": uid ?? "anon",
+        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      };
+
       const res = await fetch(`${BASE_URL}/agentChat`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-id": uid,
-        },
+        headers,
         body: JSON.stringify({
           messages: [{ role: "user", content }],
           thread_id: threadId,

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/AuthProvider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,18 +12,6 @@ import { Check, ChevronLeft, ChevronRight, Loader2, X } from "lucide-react";
 import { IT_REGIONS, CPV_SUGGESTIONS } from "@/data";
 
 const BASE_URL = process.env.NEXT_PUBLIC_TENDER_API_BASE ?? "";
-
-/* ----------------- UID locale (puoi sostituire con Firebase) ----------------- */
-function getOrCreateUID(): string {
-  if (typeof window === "undefined") return "anon";
-  const key = "tender_uid";
-  let uid = localStorage.getItem(key);
-  if (!uid) {
-    uid = crypto.randomUUID();
-    localStorage.setItem(key, uid);
-  }
-  return uid;
-}
 
 /* ----------------- Tipi ----------------- */
 type Prefs = {
@@ -64,8 +53,7 @@ function Chip({
 
 /* ----------------- Pagina ----------------- */
 export default function PreferencesPage() {
-  const uid = useMemo(getOrCreateUID, []);
-  console.log("UID:", uid);
+  const { uid, idToken } = useAuth();
   const router = useRouter();
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
@@ -79,6 +67,11 @@ export default function PreferencesPage() {
   const [minValue, setMinValue] = useState<number | null>(null);
   const [notifyDaily, setNotifyDaily] = useState<boolean>(false);
 
+  const headers: HeadersInit = {
+    "x-user-id": uid ?? "anon",
+    ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+  };
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -86,7 +79,7 @@ export default function PreferencesPage() {
         setLoading(true);
         setError(null);
         const res = await fetch(`${BASE_URL}/preferences`, {
-          headers: { "x-user-id": uid },
+          headers,
           cache: "no-store",
         });
         if (!res.ok) throw new Error(await res.text());
@@ -123,10 +116,7 @@ export default function PreferencesPage() {
       };
       const res = await fetch(`${BASE_URL}/preferences`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-id": uid,
-        },
+        headers: headers,
         body: JSON.stringify(body),
       });
 
