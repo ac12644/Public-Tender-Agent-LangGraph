@@ -415,6 +415,7 @@ export default function HomePage() {
       const headers: HeadersInit = {
         "x-user-id": uid ?? "anon",
         ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+        "Content-Type": "application/json",
       };
 
       const res = await fetch(`${BASE_URL}/agentChat`, {
