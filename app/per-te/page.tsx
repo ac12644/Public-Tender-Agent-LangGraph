@@ -50,11 +50,19 @@ type Prefs = {
   notifyDaily: boolean;
 };
 
+function normalize(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
+}
+
 function toISODate(v?: string | null): string | null {
   if (!v) return null;
   const clean = v.replace(/T\d{2}:\d{2}:\d{2}.*$/, "").replace(/\+.*/, "");
   const d = new Date(clean);
-  return isNaN(d.getTime()) ? clean : d.toISOString().slice(0, 10);
+  return Number.isNaN(d.getTime()) ? clean : d.toISOString().slice(0, 10);
 }
 
 function fmtMoney(input?: number | null): string {
@@ -166,26 +174,28 @@ function TenderCard({ r }: { r: Row }) {
 
 /* ----------------- Hooks: feed + prefs ----------------- */
 function useFeedAndPrefs() {
-  const uid = useMemo(getOrCreateUID, []);
-  const [rows, setRows] = useState<Row[]>([]);
-  const [prefs, setPrefs] = useState<Prefs | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const uid = React.useMemo(getOrCreateUID, []);
+  const [rows, setRows] = React.useState<Row[]>([]);
+  const [prefs, setPrefs] = React.useState<Prefs | null>(null);
+  const [loading, setLoading] = React.useState<boolean>(false);
+  const [err, setErr] = React.useState<string | null>(null);
 
   const reload = async () => {
     try {
       setLoading(true);
       setErr(null);
+
       const [prefRes, feedRes] = await Promise.all([
         fetch(`${BASE_URL}/preferences`, {
           headers: { "x-user-id": uid },
           cache: "no-store",
         }),
-        fetch(`${BASE_URL}/feed?limit=50`, {
+        fetch(`${BASE_URL}/feed`, {
           headers: { "x-user-id": uid },
           cache: "no-store",
         }),
       ]);
+
       if (!prefRes.ok) throw new Error(await prefRes.text());
       if (!feedRes.ok) throw new Error(await feedRes.text());
 
@@ -194,22 +204,23 @@ function useFeedAndPrefs() {
 
       setPrefs(prefJson.preferences);
 
-      const mapped = (feedJson.rows || []).map((r) => ({
+      const mapped = (feedJson.rows ?? []).map((r) => ({
         ...r,
         published: toISODate(r.published),
         deadline: toISODate(r.deadline),
       }));
       setRows(mapped);
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : typeof e === "string" ? e : "Errore";
+      setErr(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    void reload();
   }, []);
 
   return { uid, rows, prefs, loading, err, reload };
@@ -222,37 +233,41 @@ export default function PersonalizedFeedPage() {
   const [query, setQuery] = useState("");
   const [minValueFilter, setMinValueFilter] = useState<string>("");
 
-  const filtered = useMemo(() => {
+  const filtered = React.useMemo(() => {
+    if (!rows.length) return rows;
+
     let data = rows;
 
     if (prefs) {
       const now = new Date();
+      const wantedRegions = (prefs.regions ?? []).map(normalize);
+      const wantedCpv = (prefs.cpv ?? [])
+        .map((c) => String(c).trim())
+        .filter(Boolean);
+      const minVal = prefs.minValue == null ? null : Number(prefs.minValue);
       const days = Math.max(1, Number(prefs.daysBack ?? 7));
 
       data = data.filter((r) => {
-        const hay = `${r.title} ${r.buyer}`.toLowerCase();
+        const buyerN = normalize(r.buyer || "");
+        const titleN = normalize(r.title || "");
+        const haystack = `${buyerN} ${titleN}`;
 
         const regionOk =
-          !prefs.regions?.length ||
-          prefs.regions.some((rg) => hay.includes(rg.toLowerCase()));
+          wantedRegions.length === 0 ||
+          wantedRegions.some((rg) => haystack.includes(rg));
 
+        const cpvStr = (r.cpv ?? "").trim();
         const cpvOk =
-          !prefs.cpv?.length ||
-          prefs.cpv.some((c) => {
-            const want = String(c).trim();
-            if (!want) return false;
-            const have = String(r.cpv ?? "");
-            return have.startsWith(want);
-          });
+          wantedCpv.length === 0 ||
+          (cpvStr !== "" && wantedCpv.some((w) => cpvStr.startsWith(w)));
 
-        const valueOk =
-          prefs.minValue == null || (r.value ?? 0) >= Number(prefs.minValue);
+        const valueOk = minVal == null || (r.value ?? 0) >= minVal;
 
         const dateOk = (() => {
           if (!r.published) return true;
           const d = new Date(r.published);
-          if (isNaN(d.getTime())) return true;
-          const diffDays = (now.getTime() - d.getTime()) / 86400000;
+          if (Number.isNaN(d.getTime())) return true;
+          const diffDays = (now.getTime() - d.getTime()) / 86_400_000;
           return diffDays <= days + 0.5;
         })();
 
@@ -260,23 +275,8 @@ export default function PersonalizedFeedPage() {
       });
     }
 
-    const q = query.trim().toLowerCase();
-    if (q) {
-      data = data.filter(
-        (r) =>
-          r.title.toLowerCase().includes(q) ||
-          r.buyer.toLowerCase().includes(q) ||
-          (r.cpv || "").toLowerCase().includes(q)
-      );
-    }
-
-    if (minValueFilter.trim() !== "") {
-      const v = Number(minValueFilter);
-      if (!isNaN(v)) data = data.filter((r) => (r.value ?? 0) >= v);
-    }
-
     return data;
-  }, [rows, prefs, query, minValueFilter]);
+  }, [rows, prefs]);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-6">
