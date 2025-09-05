@@ -100,7 +100,6 @@ async function exportCsvFromRows(rows: Row[]) {
   URL.revokeObjectURL(url);
 }
 
-/* ----------------- Card ----------------- */
 function TenderCard({ r }: { r: Row }) {
   const tedUrl = `https://ted.europa.eu/it/notice/-/detail/${encodeURIComponent(
     r.noticeId || r.pubno
@@ -111,7 +110,6 @@ function TenderCard({ r }: { r: Row }) {
     : pdfUrl?.includes("/en/")
     ? "PDF (EN)"
     : "PDF";
-
   return (
     <Card className="border bg-gradient-to-b from-muted/40 to-background hover:shadow-md transition">
       <CardContent className="p-4">
@@ -121,7 +119,6 @@ function TenderCard({ r }: { r: Row }) {
         <div className="mt-1 text-xs text-muted-foreground">
           {r.buyer || "—"}
         </div>
-
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
           <span className="rounded-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200 px-2 py-0.5">
             PubNo: {r.pubno}
@@ -145,14 +142,12 @@ function TenderCard({ r }: { r: Row }) {
             </Badge>
           )}
         </div>
-
         <div className="mt-3 text-sm font-semibold">
           <span className="inline-flex items-center rounded-lg bg-emerald-600/10 px-2 py-1">
             <span className="mr-1.5 h-2 w-2 rounded-full bg-emerald-600" />
             {fmtMoney(r.value)}
           </span>
         </div>
-
         <div className="mt-4 flex flex-wrap gap-2">
           {pdfUrl && (
             <Button asChild size="sm" className="gap-1">
@@ -172,38 +167,32 @@ function TenderCard({ r }: { r: Row }) {
   );
 }
 
-/* ----------------- Hooks: feed + prefs ----------------- */
-function useFeedAndPrefs() {
+function useFeedAndPrefs(pageSize: number) {
   const uid = React.useMemo(getOrCreateUID, []);
   const [rows, setRows] = React.useState<Row[]>([]);
   const [prefs, setPrefs] = React.useState<Prefs | null>(null);
   const [loading, setLoading] = React.useState<boolean>(false);
   const [err, setErr] = React.useState<string | null>(null);
 
-  const reload = async () => {
+  const reload = React.useCallback(async () => {
     try {
       setLoading(true);
       setErr(null);
-
       const [prefRes, feedRes] = await Promise.all([
         fetch(`${BASE_URL}/preferences`, {
           headers: { "x-user-id": uid },
           cache: "no-store",
         }),
-        fetch(`${BASE_URL}/feed`, {
+        fetch(`${BASE_URL}/feed?limit=${pageSize}`, {
           headers: { "x-user-id": uid },
           cache: "no-store",
         }),
       ]);
-
       if (!prefRes.ok) throw new Error(await prefRes.text());
       if (!feedRes.ok) throw new Error(await feedRes.text());
-
       const prefJson = (await prefRes.json()) as { preferences: Prefs };
       const feedJson = (await feedRes.json()) as { rows: Row[] };
-
       setPrefs(prefJson.preferences);
-
       const mapped = (feedJson.rows ?? []).map((r) => ({
         ...r,
         published: toISODate(r.published),
@@ -217,27 +206,23 @@ function useFeedAndPrefs() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [uid, pageSize]);
 
   React.useEffect(() => {
     void reload();
-  }, []);
+  }, [reload]);
 
   return { uid, rows, prefs, loading, err, reload };
 }
 
-/* ----------------- Page ----------------- */
 export default function PersonalizedFeedPage() {
-  const { rows, prefs, loading, err, reload } = useFeedAndPrefs();
-
+  const [pageSize, setPageSize] = useState(60);
+  const { rows, prefs, loading, err, reload } = useFeedAndPrefs(pageSize);
   const [query, setQuery] = useState("");
   const [minValueFilter, setMinValueFilter] = useState<string>("");
 
   const filtered = React.useMemo(() => {
-    if (!rows.length) return rows;
-
     let data = rows;
-
     if (prefs) {
       const now = new Date();
       const wantedRegions = (prefs.regions ?? []).map(normalize);
@@ -246,23 +231,18 @@ export default function PersonalizedFeedPage() {
         .filter(Boolean);
       const minVal = prefs.minValue == null ? null : Number(prefs.minValue);
       const days = Math.max(1, Number(prefs.daysBack ?? 7));
-
       data = data.filter((r) => {
         const buyerN = normalize(r.buyer || "");
         const titleN = normalize(r.title || "");
         const haystack = `${buyerN} ${titleN}`;
-
         const regionOk =
           wantedRegions.length === 0 ||
           wantedRegions.some((rg) => haystack.includes(rg));
-
         const cpvStr = (r.cpv ?? "").trim();
         const cpvOk =
           wantedCpv.length === 0 ||
           (cpvStr !== "" && wantedCpv.some((w) => cpvStr.startsWith(w)));
-
         const valueOk = minVal == null || (r.value ?? 0) >= minVal;
-
         const dateOk = (() => {
           if (!r.published) return true;
           const d = new Date(r.published);
@@ -270,13 +250,33 @@ export default function PersonalizedFeedPage() {
           const diffDays = (now.getTime() - d.getTime()) / 86_400_000;
           return diffDays <= days + 0.5;
         })();
-
         return regionOk && cpvOk && valueOk && dateOk;
       });
     }
-
+    const q = query.trim().toLowerCase();
+    if (q) {
+      data = data.filter(
+        (r) =>
+          r.title.toLowerCase().includes(q) ||
+          r.buyer.toLowerCase().includes(q) ||
+          (r.cpv || "").toLowerCase().includes(q) ||
+          r.pubno.toLowerCase().includes(q)
+      );
+    }
+    if (minValueFilter.trim() !== "") {
+      const v = Number(minValueFilter);
+      if (!Number.isNaN(v)) data = data.filter((r) => (r.value ?? 0) >= v);
+    }
     return data;
-  }, [rows, prefs]);
+  }, [rows, prefs, query, minValueFilter]);
+
+  const loadMore = () => {
+    setPageSize((s) => Math.min(s + 120, 1000));
+  };
+
+  const loadAll = () => {
+    setPageSize(1000);
+  };
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-6">
@@ -340,16 +340,33 @@ export default function PersonalizedFeedPage() {
           <Loader2 className="h-4 w-4 animate-spin" /> Caricamento feed…
         </div>
       ) : (
-        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((r) => (
-            <TenderCard key={r.noticeId || r.pubno} r={r} />
-          ))}
-          {!filtered.length && (
-            <div className="col-span-full text-sm text-muted-foreground border rounded-lg p-6 text-center">
-              Nessun risultato. Modifica preferenze o filtri di ricerca.
-            </div>
-          )}
-        </div>
+        <>
+          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {filtered.map((r) => (
+              <TenderCard key={r.noticeId || r.pubno} r={r} />
+            ))}
+            {!filtered.length && (
+              <div className="col-span-full text-sm text-muted-foreground border rounded-lg p-6 text-center">
+                Nessun risultato. Modifica preferenze o filtri di ricerca.
+              </div>
+            )}
+          </div>
+          <div className="mt-6 flex items-center justify-center gap-2">
+            <Button
+              variant="outline"
+              onClick={loadMore}
+              disabled={pageSize >= 1000 || loading}
+            >
+              Carica altri
+            </Button>
+            <Button onClick={loadAll} disabled={pageSize >= 1000 || loading}>
+              Carica tutti
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Mostrati {rows.length} / {pageSize}
+            </span>
+          </div>
+        </>
       )}
     </div>
   );
