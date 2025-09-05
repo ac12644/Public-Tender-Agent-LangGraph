@@ -22,12 +22,6 @@ function qpFromPrefs(p: Prefs) {
       `(${p.cpv.map((c) => `classification-cpv = "${c}"`).join(" OR ")})`
     );
   }
-  if (p.regions && p.regions.length) {
-    const or = p.regions
-      .map((r) => `title ~ "${r}" OR description-proc ~ "${r}"`)
-      .join(" OR ");
-    parts.push(`(${or})`);
-  }
   return parts.join(" AND ");
 }
 
@@ -48,7 +42,7 @@ export const feed = onRequest(
   { region: "europe-west1", cors: true },
   async (req, res): Promise<void> => {
     if (req.method === "OPTIONS") {
-      void res.status(204).send("");
+      res.status(204).send("");
       return;
     }
     try {
@@ -57,7 +51,7 @@ export const feed = onRequest(
       const prefs = ((prof.exists ? prof.data() : {}) ?? {}) as Prefs;
 
       const q = qpFromPrefs(prefs);
-      const limit = Math.min(Number(req.query.limit ?? 30), 50);
+      const limit = Math.min(Number(req.query.limit ?? 200), 200);
       const notices = await tedSearch({ q, limit });
 
       const since = new Date(Date.now() - 14 * 24 * 3600 * 1000);
