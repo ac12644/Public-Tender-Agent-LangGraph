@@ -26,21 +26,22 @@ export const auth = getAuth(app);
 
 export const provider = new GoogleAuthProvider();
 
-export async function ensureSignedIn() {
+export async function ensureSignedIn(): Promise<User> {
   const a = getAuth();
-  if (!a.currentUser) await signInAnonymously(a);
-  return a.currentUser!;
+  if (a.currentUser) return a.currentUser;
+  const cred = await signInAnonymously(a);
+  return cred.user;
 }
 
-export async function signInWithGoogle() {
+export async function signInWithGoogle(): Promise<User> {
   const a = getAuth();
-  await signInWithPopup(a, provider);
-  return a.currentUser!;
+  const cred = await signInWithPopup(a, provider);
+  return cred.user;
 }
 
-export async function signOutUser() {
+export async function signOutUser(): Promise<void> {
   const a = getAuth();
-  await signOut(auth);
+  await signOut(a);
 }
 
 export function watchUser(cb: (u: User | null) => void) {

@@ -200,8 +200,8 @@ function useFeedAndPrefs() {
         deadline: toISODate(r.deadline),
       }));
       setRows(mapped);
-    } catch (e: any) {
-      setErr(e?.message ?? "Errore caricamento");
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }

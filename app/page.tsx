@@ -9,15 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  ArrowRight,
-  Bot,
-  ExternalLink,
-  Loader2,
-  RefreshCcw,
-  Settings2,
-  Star,
-} from "lucide-react";
+import { ArrowRight, ExternalLink, Loader2, RefreshCcw } from "lucide-react";
 
 /* -------------------------------------------------------
  * Config
@@ -51,17 +43,20 @@ type BackendMessage = {
 
 function toPlainText(content: unknown): string {
   if (typeof content === "string") return content;
+
   if (Array.isArray(content)) {
-    return (content as any[])
-      .map((p) => {
+    return content
+      .map((p: unknown) => {
         if (typeof p === "string") return p;
         if (p && typeof p === "object") {
-          const t = (p as any).text;
-          const c = (p as any).content;
-          const v = (p as any).value;
-          if (typeof t === "string") return t;
-          if (typeof c === "string") return c;
-          if (typeof v === "string") return v;
+          const obj = p as {
+            text?: unknown;
+            content?: unknown;
+            value?: unknown;
+          };
+          if (typeof obj.text === "string") return obj.text;
+          if (typeof obj.content === "string") return obj.content;
+          if (typeof obj.value === "string") return obj.value;
         }
         return "";
       })
@@ -69,11 +64,11 @@ function toPlainText(content: unknown): string {
       .join("\n")
       .trim();
   }
+
   if (content && typeof content === "object") {
-    const t = (content as any).text;
-    const c = (content as any).content;
-    if (typeof t === "string") return t;
-    if (typeof c === "string") return c;
+    const obj = content as { text?: unknown; content?: unknown };
+    if (typeof obj.text === "string") return obj.text;
+    if (typeof obj.content === "string") return obj.content;
     try {
       return JSON.stringify(content);
     } catch {
@@ -457,10 +452,11 @@ export default function HomePage() {
           },
         ]);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Errore: ${e?.message ?? String(e)}` },
+        { role: "assistant", content: `Errore: ${message}` },
       ]);
     } finally {
       setLoading(false);

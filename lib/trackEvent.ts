@@ -10,12 +10,16 @@ export type UXEvent =
 export async function trackEvent(
   type: UXEvent,
   tenderId?: string,
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 ) {
   try {
     await authedFetch(`${API}/events`, {
       method: "POST",
-      body: JSON.stringify({ type, tenderId: tenderId ?? null, metadata }),
+      body: JSON.stringify({
+        type,
+        tenderId: tenderId ?? null,
+        metadata: metadata ?? null,
+      }),
     });
   } catch {
     // silenzioso, non bloccare la UI

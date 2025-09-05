@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { UserMenu } from "@/components/UserMenu";
-import { Bot, Star, Settings2 } from "lucide-react";
+import { Bot, Star, Settings2, Heart } from "lucide-react";
 
 export function Header() {
   return (
@@ -29,6 +29,12 @@ export function Header() {
               <Link href="/per-te">
                 <Star className="h-4 w-4" />
                 Per te
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="gap-1">
+              <Link href="/preferiti">
+                <Heart className="h-4 w-4" />
+                Preferiti
               </Link>
             </Button>
             <UserMenu />

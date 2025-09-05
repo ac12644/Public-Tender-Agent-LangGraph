@@ -79,7 +79,6 @@ export default function PreferencesPage() {
   const [minValue, setMinValue] = useState<number | null>(null);
   const [notifyDaily, setNotifyDaily] = useState<boolean>(false);
 
-  /* ---- carica le preferenze esistenti ---- */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -99,8 +98,8 @@ export default function PreferencesPage() {
         setDaysBack(p.daysBack ?? 7);
         setMinValue(p.minValue ?? null);
         setNotifyDaily(!!p.notifyDaily);
-      } catch (e: any) {
-        setError(e?.message ?? "Errore nel caricamento");
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Errore nel caricamento");
       } finally {
         setLoading(false);
       }
@@ -132,15 +131,14 @@ export default function PreferencesPage() {
       });
 
       if (!res.ok) throw new Error(await res.text());
-      // router.push("/per-te");
-    } catch (e: any) {
-      setError(e?.message ?? "Errore nel salvataggio");
+      router.push("/per-te");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
   }
 
-  /* ---- step content ---- */
   function Step1() {
     const toggle = (r: string) =>
       setRegions((prev) =>
@@ -187,7 +185,6 @@ export default function PreferencesPage() {
         prev.includes(code) ? prev.filter((x) => x !== code) : [...prev, code]
       );
 
-    // 1) de-duplicate suggestions by code once
     const uniqueSuggestions = React.useMemo(() => {
       const byCode = new Map<string, (typeof CPV_SUGGESTIONS)[number]>();
       for (const item of CPV_SUGGESTIONS) {
@@ -196,7 +193,6 @@ export default function PreferencesPage() {
       return Array.from(byCode.values());
     }, []);
 
-    // 2) filter by label OR code (supports partial numeric like "48")
     const filteredAll = React.useMemo(() => {
       const q = filter.trim().toLowerCase();
       if (!q) return uniqueSuggestions;
@@ -212,19 +208,10 @@ export default function PreferencesPage() {
       });
     }, [filter, uniqueSuggestions]);
 
-    // 3) split into selected / not selected so we don't render duplicates
-    const selectedMatches = React.useMemo(
-      () => filteredAll.filter((c) => cpv.includes(c.code)),
-      [filteredAll, cpv]
-    );
-
-    const unselectedMatches = React.useMemo(
-      () =>
-        filteredAll
-          .filter((c) => !cpv.includes(c.code))
-          .sort((a, b) => a.label.localeCompare(b.label, "it")),
-      [filteredAll, cpv]
-    );
+    const selectedMatches = filteredAll.filter((c) => cpv.includes(c.code));
+    const unselectedMatches = filteredAll
+      .filter((c) => !cpv.includes(c.code))
+      .sort((a, b) => a.label.localeCompare(b.label, "it"));
 
     const totalMatches = filteredAll.length;
     const atLimit = cpv.length >= MAX_CPV;
@@ -232,7 +219,6 @@ export default function PreferencesPage() {
     return (
       <Card>
         <CardContent className="p-4 sm:p-6">
-          {/* Header + filtro allineato a destra */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Cosa ti interessa?</h2>

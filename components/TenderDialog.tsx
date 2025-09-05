@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Loader2, ExternalLink } from "lucide-react";
 import { trackEvent } from "@/lib/trackEvent";
 
+type LangMap = Record<string, string | string[]>;
+
 type Tender = {
   id: string;
   title: string;
@@ -12,9 +14,9 @@ type Tender = {
   deadline?: string;
   cpv?: string | string[] | null;
   links?: {
-    pdf?: Record<string, string | string[]>;
-    html?: Record<string, string | string[]>;
-    htmlDirect?: Record<string, string | string[]>;
+    pdf?: LangMap;
+    html?: LangMap;
+    htmlDirect?: LangMap;
   } | null;
   summary_it?: string | null;
   summary_en?: string | null;
@@ -22,23 +24,25 @@ type Tender = {
 
 function firstString(v: unknown): string | undefined {
   if (typeof v === "string") return v;
-  if (Array.isArray(v)) return v.find((x) => typeof x === "string");
+  if (Array.isArray(v))
+    return v.find((x): x is string => typeof x === "string");
   return undefined;
 }
 
-function pickPdfItaOrEn(links?: Tender["links"]) {
+function pickPdfItaOrEn(links?: Tender["links"] | null): string | null {
   const pdf = links?.pdf;
   if (!pdf) return null;
-  const pref = ["it", "ita", "IT", "ITA", "eng", "en", "EN", "ENG"];
+
+  const preferred = ["it", "ita", "IT", "ITA", "eng", "en", "EN", "ENG"];
   for (const k of Object.keys(pdf)) {
-    if (pref.includes(k)) {
-      const s = firstString((pdf as any)[k]);
+    if (preferred.includes(k)) {
+      const s = firstString(pdf[k]);
       if (s) return s;
     }
   }
-  // fallback: primo disponibile
+
   const anyKey = Object.keys(pdf)[0];
-  return firstString((pdf as any)[anyKey]) ?? null;
+  return anyKey ? firstString(pdf[anyKey]) ?? null : null;
 }
 
 export function TenderDialog({
@@ -62,8 +66,8 @@ export function TenderDialog({
         `${baseUrl}/tenderGet?id=${encodeURIComponent(tenderId)}`,
         { cache: "no-store" }
       );
-      const data = await res.json();
-      setT(data as Tender);
+      const data: Tender = await res.json();
+      setT(data);
     } catch (e) {
       console.error(e);
     } finally {
@@ -71,7 +75,7 @@ export function TenderDialog({
     }
   }
 
-  const pdf = pickPdfItaOrEn(t?.links || null);
+  const pdf = pickPdfItaOrEn(t?.links ?? null);
   const tedUrl = `https://ted.europa.eu/it/notice/-/detail/${encodeURIComponent(
     tenderId
   )}`;
